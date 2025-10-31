@@ -47,9 +47,9 @@ Upload a job description and multiple candidate resumes (PDFs), and the app will
 ```bash
 git clone https://github.com/<your-username>/<your-repo-name>.git
 cd <your-repo-name>
+```
 
-
-📂 Usage
+###📂 Usage
 
 Step 1: Enter or upload a job description (PDF)
 
@@ -60,7 +60,7 @@ Step 3: Click to rank resumes
 View top results, download a CSV report, and review semantic highlights
 The higher the score, the better the alignment between the resume and the job description.
 
-💡 How It Works
+###💡 How It Works
 
 The job description and each resume are encoded into high-dimensional vectors using a pretrained transformer (all-MiniLM-L6-v2).
 
@@ -68,7 +68,7 @@ The app calculates the cosine similarity between the job description vector and 
 
 The results are sorted, filtered by a similarity threshold, and displayed interactively.
 
-🧰 Customization
+###🧰 Customization
 
 You can adjust:
 
@@ -78,11 +78,11 @@ Top N Results: Control how many best resumes to display
 
 Model Name: Try other SentenceTransformer models for improved accuracy
 
-📦 Download Results
+###📦 Download Results
 
 Click “Download CSV File” to export the ranked list of resumes along with their similarity scores.
 
-🧠 Future Enhancements
+### Future Enhancements
 
 🗂️ Support for DOCX and text files
 
@@ -92,7 +92,7 @@ Click “Download CSV File” to export the ranked list of resumes along with th
 
 ⚡ GPU acceleration with Torch CUDA
 
-🧑‍💻 Author
+###🧑‍💻 Author
 
 Aakash Padarthi
 🎓 Student & AI Enthusiast
