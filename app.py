@@ -1,178 +1,167 @@
+# ===============================
+# AI Resume Screening using NLP Embeddings (Semantic Similarity)
+# ===============================
+
 import streamlit as st
 from PyPDF2 import PdfReader
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer, util
 import base64
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
-import os
-import tempfile  # Import tempfile to handle temporary file paths
+import tempfile
+import html
 
-# Function to extract text from PDF
+# ------------------------------
+# 1. PDF Text Extraction
+# ------------------------------
 def extract_text_from_pdf(file):
+    """Extract text from uploaded PDF."""
     try:
         pdf = PdfReader(file)
         text = ""
         for page in pdf.pages:
-            text += page.extract_text() or ""  # Handle cases where extract_text returns None
-        return text
+            text += page.extract_text() or ""
+        return text.strip()
     except Exception as e:
         st.error(f"Error reading {file.name}: {e}")
         return ""
 
-# Function to rank resumes based on job description
-def rank_resumes(job_description, resumes):
-    # Combine job description with resumes
-    documents = [job_description] + resumes
-    vectorizer = TfidfVectorizer().fit_transform(documents)
-    vectors = vectorizer.toarray()
+# ------------------------------
+# 2. Compute Semantic Similarity
+# ------------------------------
+@st.cache_resource
+def load_model():
+    """Load the SentenceTransformer model (cached)."""
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-    # Calculate cosine similarity
-    job_description_vector = vectors[0]
-    resume_vectors = vectors[1:]
-    cosine_similarities = cosine_similarity([job_description_vector], resume_vectors).flatten()
-    
-    return cosine_similarities
+def rank_resumes_semantic(job_description, resumes):
+    """Compute semantic similarity between job description and resumes."""
+    model = load_model()
+    embeddings = model.encode([job_description] + resumes, convert_to_tensor=True)
+    cosine_scores = util.cos_sim(embeddings[0], embeddings[1:]).cpu().numpy().flatten()
+    return cosine_scores
 
-# Function to create a download link for the results
+# ------------------------------
+# 3. CSV Download Link
+# ------------------------------
 def create_download_link(df, filename="results.csv"):
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
-    href = f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download CSV File</a>'
-    return href
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}"> Download CSV File</a>'
 
-# Function to send email with attached results
-def send_email_with_attachment(subject, body, to_email, attachment_path):
-    from_email = os.getenv('SENDER_EMAIL')  # Use environment variable or secrets.toml
-    from_password = os.getenv('SENDER_PASSWORD')  # Use environment variable or secrets.toml
+# ------------------------------
+# 4. Streamlit App
+# ------------------------------
+# Set page config to wide layout
+st.set_page_config(page_title="AI Resume Screener (Semantic NLP)",layout="wide")
 
-    msg = MIMEMultipart()
-    msg['From'] = from_email
-    msg['To'] = to_email
-    msg['Subject'] = subject
+# Custom CSS for larger fonts and better line spacing
+st.markdown(
+    """
+    <style>
+    html, body, [class*="css"] {
+        font-size: 32px !important;       /* Bigger letters */
+        line-height: 1.8 !important;      /* More spacing between lines */
+    }
+    .stTextInput, .stTextArea, .stNumberInput {
+        font-size: 28px !important;       /* Inputs larger */
+    }
+    .css-1d391kg p {                     /* Paragraph spacing */
+        line-height: 1.8 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-    # Attach body of the email
-    msg.attach(MIMEText(body, 'plain'))
+st.write("Upload a job description and candidate resumes to automatically rank them using semantic similarity.")
 
-    # Attach the CSV file
-    with open(attachment_path, "rb") as attachment:
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(attachment.read())
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition", f"attachment; filename={attachment_path}")
-        msg.attach(part)
-
-    # Send the email
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(from_email, from_password)
-            server.sendmail(from_email, to_email, msg.as_string())
-        st.success(f"Email sent to {to_email} successfully!")
-    except Exception as e:
-        st.error(f"Error sending email: {e}")
-
-# Streamlit app
-st.title("AI Resume Screening & Candidate Ranking System")
-
-# Sidebar for additional options
+# Sidebar controls
 with st.sidebar:
-    st.header("Options")
-    threshold = st.slider("Set a similarity score threshold", 0.0, 1.0, 0.5)
-    top_n = st.number_input("Number of top resumes to display", min_value=1, value=5)
+    st.header("⚙️ Options")
+    threshold = st.slider("Similarity threshold", 0.0, 1.0, 0.5, step=0.05)
+    top_n = st.number_input("Number of top resumes", min_value=1, value=5)
+    st.markdown("---")
+    st.caption("Model: `all-MiniLM-L6-v2` (Sentence Transformers)")
 
-# Job description input
-st.header("Job Description")
-job_description_option = st.radio("Choose job description input method:", ("Text Input", "Upload PDF"))
+# Step 1: Job Description
+st.header(" Step 1: Provide Job Description")
+option = st.radio("Input method:", ["Type manually", "Upload PDF"])
 
-job_description = ""  # Initialize variable to store job description
+job_description = ""
+if option == "Type manually":
+    job_description = st.text_area("Enter job description")
+else:
+    jd_file = st.file_uploader("Upload job description (PDF)", type=["pdf"])
+    if jd_file:
+        job_description = extract_text_from_pdf(jd_file)
 
-if job_description_option == "Text Input":
-    job_description = st.text_area("Enter the job description")
-    save_button = st.button("Save Job Description")  # Save button for text input
+# Step 2: Upload Resumes
+st.header("📂 Step 2: Upload Candidate Resumes")
+uploaded_files = st.file_uploader("Upload resumes (PDF)", type=["pdf"], accept_multiple_files=True)
 
-elif job_description_option == "Upload PDF":
-    job_description_file = st.file_uploader("Upload job description as PDF", type=["pdf"])
-    if job_description_file:
-        job_description = extract_text_from_pdf(job_description_file)
-    save_button = st.button("Save Job Description")  # Save button for PDF input
+# Step 3: Rank Resumes
+if uploaded_files and job_description.strip():
+    st.header("📊 Step 3: Ranking Results")
 
-# Save button action
-if save_button:
-    if job_description:
-        st.success("Job Description Saved!")
-    else:
-        st.error("Please provide a valid job description.")
-
-# File uploader
-st.header("Upload Resumes")
-uploaded_files = st.file_uploader("Upload PDF files", type=["pdf"], accept_multiple_files=True)
-
-if uploaded_files and job_description:
-    st.header("Ranking Resumes")
-
-    resumes = []  # Initialize as an empty list
-    for file in uploaded_files:
+    resumes_text = []
+    progress = st.progress(0)
+    for i, file in enumerate(uploaded_files):
         text = extract_text_from_pdf(file)
-        resumes.append(text)
+        if len(text) < 50:
+            st.warning(f"⚠️ {file.name} might be empty or image-based.")
+        resumes_text.append(text)
+        progress.progress((i + 1) / len(uploaded_files))
 
-    # Rank resumes
-    scores = rank_resumes(job_description, resumes)
+    with st.spinner("Calculating semantic similarity..."):
+        scores = rank_resumes_semantic(job_description, resumes_text)
 
-    # Display scores
-    results = pd.DataFrame({"Resume": [file.name for file in uploaded_files], "Score": scores})
-    results = results.sort_values(by="Score", ascending=False)
+    results = pd.DataFrame({
+        "Resume": [file.name for file in uploaded_files],
+        "Semantic Score": scores
+    }).sort_values(by="Semantic Score", ascending=False)
 
-    # Filter results based on threshold
-    filtered_results = results[results["Score"] >= threshold]
+    # Filter based on threshold
+    filtered = results[results["Semantic Score"] >= threshold]
 
-    # Display top N resumes
-    st.subheader(f"Top {top_n} Resumes")
-    st.write(filtered_results.head(top_n))
+    # Display top results
+    st.subheader(f" Top {top_n} Resumes")
+    st.write(filtered.head(top_n))
 
-    # Display all results in an expander
-    with st.expander("View All Results"):
-        st.write(results)
+    with st.expander(" View All Results"):
+        st.dataframe(results)
 
-    # Download link for results
+    # Download link
     st.markdown(create_download_link(results), unsafe_allow_html=True)
 
-    # Highlight keywords in top resumes
-    st.subheader("Keyword Highlights in Top Resumes")
-    vectorizer = TfidfVectorizer()
-    job_description_vector = vectorizer.fit_transform([job_description])
-    job_description_keywords = vectorizer.get_feature_names_out()
+    # ------------------------------
+    # Step 4: Keyword Highlights
+    # ------------------------------
+    st.subheader(" Semantic Highlights (Closest Sentences)")
+    model = load_model()
 
-    for i, (resume, score) in enumerate(zip(filtered_results["Resume"].head(top_n), filtered_results["Score"].head(top_n))):
-        st.write(f"*Resume:* {resume} (Score: {score:.2f})")
-        resume_text = resumes[uploaded_files.index([file for file in uploaded_files if file.name == resume][0])]
-        highlighted_text = resume_text
-        for keyword in job_description_keywords:
-            if keyword in resume_text:
-                highlighted_text = highlighted_text.replace(keyword, f"<b>{keyword}</b>")
-        st.markdown(highlighted_text, unsafe_allow_html=True)
-        st.write("---")
-
-    # Email sending feature
-    email_input = st.text_input("Enter recipient's email address:")
-    email_button = st.button("Send Results via Email")
-
-    if email_button and email_input:
-        # Create a temporary file to save the results CSV
-        with tempfile.NamedTemporaryFile(delete=False, mode='w', newline='') as tmp_file:
-            results.to_csv(tmp_file, index=False)
-            tmp_file_path = tmp_file.name
+    for _, row in filtered.head(top_n).iterrows():
+        resume_name = row["Resume"]
+        resume_text = resumes_text[uploaded_files.index(
+            [f for f in uploaded_files if f.name == resume_name][0]
+        )]
         
-        # Send email with the results CSV file attached
-        send_email_with_attachment(
-            subject="AI Resume Screening Results",
-            body="Please find attached the results of the AI resume screening.",
-            to_email=email_input,
-            attachment_path=tmp_file_path
-        )
+        # Split into sentences
+        sentences = [s.strip() for s in resume_text.split("\n") if len(s.strip()) > 10]
+        if not sentences:
+            continue
+
+        # Compute similarity with each sentence
+        sentence_embeddings = model.encode(sentences, convert_to_tensor=True)
+        jd_embedding = model.encode(job_description, convert_to_tensor=True)
+        scores_sentences = util.cos_sim(jd_embedding, sentence_embeddings)[0].cpu().numpy()
+
+        top_idx = scores_sentences.argsort()[-3:][::-1]
+        top_sentences = [sentences[i] for i in top_idx]
+
+        st.markdown(f"** {resume_name} (Score: {row['Semantic Score']:.2f})**")
+        for s in top_sentences:
+            st.markdown(f">  _{html.escape(s)}_")
+        st.markdown("---")
 
 else:
-    st.warning("Please upload resumes and provide a job description to proceed.")
+    st.info("Please provide a job description and upload resumes to start ranking.")
